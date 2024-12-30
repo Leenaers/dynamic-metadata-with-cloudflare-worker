@@ -210,9 +210,9 @@ class CustomHeaderHandler {
 
       // Remove the noindex meta tag
       const robots = element.getAttribute("name");
-      if (robots === "robots" && element.getAttribute("content") === "noindex") {
-        console.log('Removing noindex tag');
-        element.remove();
+      if (robots === "robots") {
+        console.log('Updating robots meta tag to index, follow');
+        element.setAttribute("content", "index, follow");
       }
 	    
     }
