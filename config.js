@@ -4,6 +4,10 @@ export const config = {
       {
           pattern: "/locatie/[^/]+",
           metaDataEndpoint: "https://api.kiddie.nl/api:nof6BxVO/facility/seo/{id}/"
+      },
+			{
+          pattern: "/regio/[^/]+",
+          metaDataEndpoint: "https://api.kiddie.nl/api:nof6BxVO/region/seo/{id}/"
       }
       // Add more patterns and their metadata endpoints as needed
   ]
