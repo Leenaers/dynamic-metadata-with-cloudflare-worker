@@ -10,7 +10,22 @@ export default {
 
     // Parse the request URL
     const url = new URL(request.url);
-    const referer = request.headers.get('Referer')
+    const referer = request.headers.get('Referer');
+
+    // Function to check if the URL is one of the static pages we want to index
+    function isStaticIndexPage(pathname) {
+      // Remove trailing slash for comparison
+      const cleanPath = pathname.endsWith('/') ? pathname.slice(0, -1) : pathname;
+      
+      // Array of paths we want to index
+      const indexPaths = [
+        '/',                    // home
+        '/blogs',              // blogs
+        '/regio-overzicht'     // regio-overzicht
+      ];
+      
+      return indexPaths.includes(cleanPath);
+    }
 
     // Function to get the pattern configuration that matches the URL
     function getPatternConfig(url) {
@@ -48,6 +63,35 @@ export default {
       return metadata;
     }
 
+    // Handle static index pages
+    if (isStaticIndexPage(url.pathname)) {
+      console.log("Static index page detected:", url.pathname);
+      
+      // Fetch the source page content
+      let source = await fetch(`${domainSource}${url.pathname}`);
+      
+      // Remove "X-Robots-Tag" from the headers
+      const sourceHeaders = new Headers(source.headers);
+      sourceHeaders.delete('X-Robots-Tag');
+      source = new Response(source.body, {
+        status: source.status,
+        headers: sourceHeaders
+      });
+
+      // Transform the source HTML to update robots meta tag
+      return new HTMLRewriter()
+        .on('meta', {
+          element(element) {
+            const robots = element.getAttribute("name");
+            if (robots === "robots") {
+              console.log('Updating robots meta tag to index, follow for static page');
+              element.setAttribute("content", "index, follow");
+            }
+          }
+        })
+        .transform(source);
+    }
+
     // Handle dynamic page requests
     const patternConfig = getPatternConfig(url.pathname);
     if (patternConfig) {
@@ -77,8 +121,8 @@ export default {
 
     // Handle page data requests for the WeWeb app
     } else if (isPageData(url.pathname)) {
-      	console.log("Page data detected:", url.pathname);
-	console.log("Referer:", referer);
+      console.log("Page data detected:", url.pathname);
+      console.log("Referer:", referer);
 
       // Fetch the source data content
       const sourceResponse = await fetch(`${domainSource}${url.pathname}`);
@@ -117,7 +161,7 @@ export default {
             sourceData.page.meta.keywords.en = metadata.keywords;
           }
 
-	  console.log("returning file: ", JSON.stringify(sourceData));
+          console.log("returning file: ", JSON.stringify(sourceData));
           // Return the modified JSON object
           return new Response(JSON.stringify(sourceData), {
             headers: { 'Content-Type': 'application/json' }
@@ -214,7 +258,6 @@ class CustomHeaderHandler {
         console.log('Updating robots meta tag to index, follow');
         element.setAttribute("content", "index, follow");
       }
-	    
     }
   }
 }
