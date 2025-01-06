@@ -16,10 +16,14 @@ export default {
     function isStaticIndexPage(pathname) {
       // Remove trailing slash for comparison
       const cleanPath = pathname.endsWith('/') ? pathname.slice(0, -1) : pathname;
-      
+
+			// Special handling for home page
+      if (cleanPath === '' || cleanPath === '/') {
+        return true;
+      }
+			
       // Array of paths we want to index
       const indexPaths = [
-        '/',                    // home
         '/blogs',              // blogs
         '/regio-overzicht'     // regio-overzicht
       ];
