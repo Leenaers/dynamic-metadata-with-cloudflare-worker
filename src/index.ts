@@ -97,39 +97,56 @@ export default {
 		console.log('Is Bot:', isBot);
 
     // Handle bot requests
-    if (isBot && !url.pathname.match(/\.(js|css|xml|json|png|jpg|gif|pdf)$/i)) {
-      try {
-        monitoring.logEvent('bot_detected', { url: url.href, userAgent });
-        
+    // Handle bot requests
+if (isBot && !url.pathname.match(/\.(js|css|xml|json|png|jpg|gif|pdf)$/i)) {
+    console.log('Bot detected, trying to serve prerendered content');
+    try {
         const urlHash = btoa(url.href);
+        console.log('Looking for content with hash:', urlHash);
+        
         const stored = await env.R2.get(urlHash);
-
+        
         if (stored) {
-          monitoring.logEvent('cache_hit', { url: url.href });
-          return new Response(await stored.text(), {
-            headers: { 'Content-Type': 'text/html' }
-          });
+            const content = await stored.text();
+            console.log('Found prerendered content:', {
+                url: url.href,
+                contentLength: content.length,
+                firstChars: content.substring(0, 200), // Log first 200 chars
+                hasHTML: content.includes('<!DOCTYPE html>'),
+                hasBody: content.includes('<body'),
+                timestamp: stored.httpMetadata.lastModified
+            });
+            
+            monitoring.logEvent('cache_hit', { url: url.href });
+            return new Response(content, {
+                headers: { 
+                    'Content-Type': 'text/html',
+                    'X-Served-By': 'prerender-cache',  // Add this to identify prerendered responses
+                    'X-Prerender-Info': 'cached'
+                }
+            });
         }
 
+        console.log('No prerendered content found for hash:', urlHash);
         monitoring.logEvent('cache_miss', { url: url.href });
         
         // Queue for prerendering if not already queued
         try {
-          await env.PRERENDER_QUEUE.send({
-            url: url.href,
-            timestamp: Date.now()
-          });
-          console.log('URL queued for prerendering:', url.href);
+            await env.PRERENDER_QUEUE.send({
+                url: url.href,
+                timestamp: Date.now()
+            });
+            console.log('URL queued for prerendering:', url.href);
         } catch (error) {
-          console.error('Failed to queue URL:', error);
+            console.error('Failed to queue URL:', error);
         }
-      } catch (error) {
+    } catch (error) {
         console.error('Error handling bot request:', error);
         monitoring.logEvent('error', { url: url.href, error: error.message });
-      } finally {
+    } finally {
         await monitoring.send();
-      }
     }
+}
 
     // Function to check if the URL is one of the static pages we want to index
     function isStaticIndexPage(pathname) {
