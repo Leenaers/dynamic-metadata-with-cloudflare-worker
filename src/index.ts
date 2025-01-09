@@ -87,7 +87,6 @@ export default {
 
     // Parse the request URL
     const url = new URL(request.url);
-    const referer = request.headers.get('Referer');
     
     // Bot detection
     const userAgent = request.headers.get('user-agent')?.toLowerCase() || '';
@@ -96,74 +95,49 @@ export default {
     console.log('User Agent:', userAgent);
     console.log('Is Bot:', isBot);
 
-    // Handle bot requests FIRST
-    // Handle bot requests FIRST
-if (isBot) {
-    // First check if it's a static asset - if so, serve normally
-    if (url.pathname.match(/\.(js|css|xml|json|png|jpg|gif|pdf)$/i)) {
-        console.log('Bot requesting static asset, serving normally:', url.pathname);
-        const sourceUrl = new URL(`${domainSource}${url.pathname}`);
-        const sourceRequest = new Request(sourceUrl, request);
-        const sourceResponse = await fetch(sourceRequest);
-        return new Response(sourceResponse.body, {
-            status: sourceResponse.status,
-            headers: sourceResponse.headers,
-        });
-    }
-
-    // For HTML pages, try to serve prerendered content
-    console.log('Bot detected, trying to serve prerendered content');
-    try {
-        const urlHash = btoa(url.href);
-        console.log('Looking for content with hash:', urlHash);
-        
-        const stored = await env.R2.get(urlHash);
-        
-        if (stored) {
-            const content = await stored.text();
-            console.log('Found prerendered content:', {
-                url: url.href,
-                contentLength: content.length,
-                firstChars: content.substring(0, 200),
-                hasHTML: content.includes('<!DOCTYPE html>'),
-                hasBody: content.includes('<body'),
-                timestamp: stored.httpMetadata.lastModified
-            });
-            
-            monitoring.logEvent('cache_hit', { url: url.href });
-            return new Response(content, {
-                headers: { 
-                    'Content-Type': 'text/html',
-                    'X-Served-By': 'prerender-cache',
-                    'X-Prerender-Info': 'cached'
-                }
-            });
-        }
-
-        console.log('No prerendered content found for hash:', urlHash);
-        monitoring.logEvent('cache_miss', { url: url.href });
-        
-        // Queue for prerendering if not already queued
+    // If it's a bot AND NOT a static asset, handle it completely separately
+    if (isBot && !url.pathname.match(/\.(png|jpg|jpeg|gif|svg|css|ico|woff|woff2)$/i)) {
+        console.log('Bot detected, handling separately');
         try {
+            const urlHash = btoa(url.href);
+            const stored = await env.R2.get(urlHash);
+            
+            if (stored) {
+                console.log('Serving prerendered content for:', url.href);
+                const content = await stored.text();
+                monitoring.logEvent('cache_hit', { url: url.href });
+                await monitoring.send();
+                
+                // Return immediately with prerendered content
+                return new Response(content, {
+                    headers: { 
+                        'Content-Type': 'text/html',
+                        'X-Served-By': 'prerender-cache'
+                    }
+                });
+            }
+
+            // If no prerendered content, queue it
+            console.log('No prerendered content, queueing:', url.href);
             await env.PRERENDER_QUEUE.send({
                 urls: [url.href],
                 timestamp: Date.now()
             });
-            console.log('URL queued for prerendering:', url.href);
+            monitoring.logEvent('cache_miss', { url: url.href });
+            await monitoring.send();
         } catch (error) {
-            console.error('Failed to queue URL:', error);
+            console.error('Bot handling error:', error);
+            monitoring.logEvent('error', { url: url.href, error: error.message });
+            await monitoring.send();
         }
-    } catch (error) {
-        console.error('Error handling bot request:', error);
-        monitoring.logEvent('error', { url: url.href, error: error.message });
-    } finally {
-        await monitoring.send();
     }
-}
 
-    // Only continue with normal processing if:
-    // 1. Not a bot request
-    // 2. Bot request but no cached content available yet
+    // Only reach this point if:
+    // 1. Not a bot
+    // 2. Is a bot but requesting static asset
+    // 3. Is a bot but no prerendered content yet
+    
+    const referer = request.headers.get('Referer');
 
     // Function to check if the URL is one of the static pages we want to index
     function isStaticIndexPage(pathname) {
