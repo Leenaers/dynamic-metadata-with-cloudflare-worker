@@ -1,4 +1,3 @@
-import { config } from '../config.js';
 
 // Monitoring class
 class PrerenderMonitoring {
