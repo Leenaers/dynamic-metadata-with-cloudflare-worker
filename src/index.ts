@@ -130,9 +130,9 @@ export default {
         // Queue the URL for prerendering if not already queued
         try {
           await env.PRERENDER_QUEUE.send({
-            url: url.href,
-            timestamp: Date.now()
-          });
+		  urls: [url.href],  // Note: as array since processor expects array
+		  timestamp: Date.now()
+	});
           console.log('URL queued for prerendering:', url.href);
         } catch (error) {
           console.error('Failed to queue URL:', error);
