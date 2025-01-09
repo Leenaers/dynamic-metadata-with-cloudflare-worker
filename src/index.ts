@@ -1,90 +1,5 @@
 import { config } from '../config.js';
 
-// Queue Processor Worker
-class PrerenderMonitoring {
-  constructor(env) {
-    this.startTime = Date.now();
-    this.events = [];
-    this.env = env;
-  }
-
-  logEvent(type, data) {
-    this.events.push({
-      timestamp: Date.now(),
-      type,
-      duration: Date.now() - this.startTime,
-      ...data
-    });
-  }
-
-  async send() {
-    try {
-      const date = new Date().toISOString().split('T')[0];
-      const logKey = `logs/${date}.json`;
-      
-      let existingLogs = [];
-      try {
-        const existing = await this.env.R2.get(logKey);
-        if (existing) {
-          existingLogs = JSON.parse(await existing.text());
-        }
-      } catch (error) {
-        console.error('Error reading existing logs:', error);
-      }
-      
-      const updatedLogs = [...existingLogs, ...this.events];
-      await this.env.R2.put(logKey, JSON.stringify(updatedLogs), {
-        httpMetadata: { contentType: 'application/json' }
-      });
-
-      const summary = {
-        total_events: updatedLogs.length,
-        successful_renders: updatedLogs.filter(e => e.type === 'success').length,
-        failed_renders: updatedLogs.filter(e => e.type === 'error').length,
-        skipped_renders: updatedLogs.filter(e => e.type === 'skip').length,
-        last_updated: new Date().toISOString()
-      };
-
-      await this.env.R2.put('logs/summary.json', JSON.stringify(summary), {
-        httpMetadata: { contentType: 'application/json' }
-      });
-    } catch (error) {
-      console.error('Logging error:', error);
-    }
-  }
-}
-
-async function waitForRender(response) {
-  const html = await response.text();
-  
-  // Create a new response with the HTML
-  const newResponse = new Response(html, response);
-  
-  // Use HTMLRewriter to check if content is loaded
-  let contentFound = false;
-  let mainContent = '';
-
-  const rewriter = new HTMLRewriter()
-    .on('div', {
-      element(element) {
-        if (element.hasAttribute('data-weweb-id')) {
-          contentFound = true;
-        }
-      },
-      text(text) {
-        mainContent += text.text;
-      }
-    });
-
-  const transformedResponse = await rewriter.transform(newResponse).text();
-  
-  if (!contentFound || mainContent.trim().length < 100) {
-    throw new Error('Content not fully rendered');
-  }
-
-  return transformedResponse;
-}
-
 // User agents handled by Prerender
 const BOT_AGENTS = [
   "googlebot",
@@ -173,7 +88,61 @@ const IGNORE_EXTENSIONS = [
 
 // Add monitoring class at the top
 class PrerenderMonitoring {
-  // ... (monitoring class code from before) ...
+  constructor(env) {
+    this.startTime = Date.now();
+    this.events = [];
+    this.env = env;
+  }
+
+  logEvent(type, data) {
+    this.events.push({
+      timestamp: Date.now(),
+      type,
+      duration: Date.now() - this.startTime,
+      ...data
+    });
+  }
+
+  async send() {
+    try {
+      const date = new Date().toISOString().split('T')[0];
+      const logKey = `logs/${date}.json`;
+      
+      let existingLogs = [];
+      try {
+        const existing = await this.env.R2.get(logKey);
+        if (existing) {
+          existingLogs = JSON.parse(await existing.text());
+        }
+      } catch (error) {
+        console.error('Error reading existing logs:', error);
+      }
+      
+      const updatedLogs = [...existingLogs, ...this.events];
+      
+      await this.env.R2.put(logKey, JSON.stringify(updatedLogs), {
+        httpMetadata: {
+          contentType: 'application/json'
+        }
+      });
+
+      const summary = {
+        total_events: updatedLogs.length,
+        successful_renders: updatedLogs.filter(e => e.type === 'success').length,
+        failed_renders: updatedLogs.filter(e => e.type === 'error').length,
+        skipped_renders: updatedLogs.filter(e => e.type === 'skip').length,
+        last_updated: new Date().toISOString()
+      };
+
+      await this.env.R2.put('logs/summary.json', JSON.stringify(summary), {
+        httpMetadata: {
+          contentType: 'application/json'
+        }
+      });
+    } catch (error) {
+      console.error('Logging error:', error);
+    }
+  }
 }
 
 export default {
@@ -215,9 +184,9 @@ export default {
         // Queue the URL for prerendering if not already queued
         try {
           await env.PRERENDER_QUEUE.send({
-		  urls: [url.href],  // Note: as array since processor expects array
-		  timestamp: Date.now()
-	});
+            url: url.href,
+            timestamp: Date.now()
+          });
           console.log('URL queued for prerendering:', url.href);
         } catch (error) {
           console.error('Failed to queue URL:', error);
