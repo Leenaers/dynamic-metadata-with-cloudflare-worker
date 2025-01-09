@@ -93,6 +93,9 @@ export default {
     const userAgent = request.headers.get('user-agent')?.toLowerCase() || '';
     const isBot = BOT_AGENTS.some(bot => userAgent.includes(bot));
 
+		console.log('User Agent:', userAgent);
+		console.log('Is Bot:', isBot);
+
     // Handle bot requests
     if (isBot && !url.pathname.match(/\.(js|css|xml|json|png|jpg|gif|pdf)$/i)) {
       try {
