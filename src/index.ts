@@ -1,7 +1,84 @@
 import { config } from '../config.js';
 
+// Monitoring class
+class PrerenderMonitoring {
+  constructor(env) {
+    this.startTime = Date.now();
+    this.events = [];
+    this.env = env;
+  }
+
+  logEvent(type, data) {
+    this.events.push({
+      timestamp: Date.now(),
+      type,
+      duration: Date.now() - this.startTime,
+      ...data
+    });
+  }
+
+  async send() {
+    try {
+      const date = new Date().toISOString().split('T')[0];
+      const logKey = `logs/${date}.json`;
+      
+      let existingLogs = [];
+      try {
+        const existing = await this.env.R2.get(logKey);
+        if (existing) {
+          existingLogs = JSON.parse(await existing.text());
+        }
+      } catch (error) {
+        console.error('Error reading existing logs:', error);
+      }
+      
+      const updatedLogs = [...existingLogs, ...this.events];
+      
+      await this.env.R2.put(logKey, JSON.stringify(updatedLogs), {
+        httpMetadata: {
+          contentType: 'application/json'
+        }
+      });
+
+      const summary = {
+        total_events: updatedLogs.length,
+        successful_renders: updatedLogs.filter(e => e.type === 'success').length,
+        failed_renders: updatedLogs.filter(e => e.type === 'error').length,
+        skipped_renders: updatedLogs.filter(e => e.type === 'skip').length,
+        last_updated: new Date().toISOString()
+      };
+
+      await this.env.R2.put('logs/summary.json', JSON.stringify(summary), {
+        httpMetadata: {
+          contentType: 'application/json'
+        }
+      });
+    } catch (error) {
+      console.error('Logging error:', error);
+    }
+  }
+}
+
+// Bot detection constants
+const BOT_AGENTS = [
+  'bot',
+  'crawler',
+  'spider',
+  'googlebot',
+  'chrome-lighthouse',
+  'headlesschrome',
+  'slurp',
+  'bingbot',
+  'whatsapp',
+  'facebook',
+  'twitter',
+  'linkedin'
+];
+
 export default {
   async fetch(request, env, ctx) {
+    const monitoring = new PrerenderMonitoring(env);
+    
     // Extracting configuration values
     const domainSource = config.domainSource;
     const patterns = config.patterns;
@@ -11,21 +88,57 @@ export default {
     // Parse the request URL
     const url = new URL(request.url);
     const referer = request.headers.get('Referer');
+    
+    // Bot detection
+    const userAgent = request.headers.get('user-agent')?.toLowerCase() || '';
+    const isBot = BOT_AGENTS.some(bot => userAgent.includes(bot));
+
+    // Handle bot requests
+    if (isBot && !url.pathname.match(/\.(js|css|xml|json|png|jpg|gif|pdf)$/i)) {
+      try {
+        monitoring.logEvent('bot_detected', { url: url.href, userAgent });
+        
+        const urlHash = btoa(url.href);
+        const stored = await env.R2.get(urlHash);
+
+        if (stored) {
+          monitoring.logEvent('cache_hit', { url: url.href });
+          return new Response(await stored.text(), {
+            headers: { 'Content-Type': 'text/html' }
+          });
+        }
+
+        monitoring.logEvent('cache_miss', { url: url.href });
+        
+        // Queue for prerendering if not already queued
+        try {
+          await env.PRERENDER_QUEUE.send({
+            url: url.href,
+            timestamp: Date.now()
+          });
+          console.log('URL queued for prerendering:', url.href);
+        } catch (error) {
+          console.error('Failed to queue URL:', error);
+        }
+      } catch (error) {
+        console.error('Error handling bot request:', error);
+        monitoring.logEvent('error', { url: url.href, error: error.message });
+      } finally {
+        await monitoring.send();
+      }
+    }
 
     // Function to check if the URL is one of the static pages we want to index
     function isStaticIndexPage(pathname) {
-      // Remove trailing slash for comparison
       const cleanPath = pathname.endsWith('/') ? pathname.slice(0, -1) : pathname;
 
-			// Special handling for home page
       if (cleanPath === '' || cleanPath === '/') {
         return true;
       }
-			
-      // Array of paths we want to index
+      
       const indexPaths = [
-        '/blogs',              // blogs
-        '/regio-overzicht'     // regio-overzicht
+        '/blogs',              
+        '/regio-overzicht'     
       ];
       
       return indexPaths.includes(cleanPath);
@@ -43,25 +156,18 @@ export default {
       return null;
     }
 
-    // Function to check if the URL matches the page data pattern (For the WeWeb app)
+    // Function to check if the URL matches the page data pattern
     function isPageData(url) {
       const pattern = /\/public\/data\/[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}\.json/;
       return pattern.test(url);
     }
 
     async function requestMetadata(url, metaDataEndpoint) {
-      // Remove any trailing slash from the URL
       const trimmedUrl = url.endsWith('/') ? url.slice(0, -1) : url;
-    
-      // Split the trimmed URL by '/' and get the last part: The id
       const parts = trimmedUrl.split('/');
       const id = parts[parts.length - 1];
-    
-      // Replace the placeholder in metaDataEndpoint with the actual id
       const placeholderPattern = /{([^}]+)}/;
       const metaDataEndpointWithId = metaDataEndpoint.replace(placeholderPattern, id);
-    
-      // Fetch metadata from the API endpoint
       const metaDataResponse = await fetch(metaDataEndpointWithId);
       const metadata = await metaDataResponse.json();
       return metadata;
@@ -71,10 +177,8 @@ export default {
     if (isStaticIndexPage(url.pathname)) {
       console.log("Static index page detected:", url.pathname);
       
-      // Fetch the source page content
       let source = await fetch(`${domainSource}${url.pathname}`);
       
-      // Remove "X-Robots-Tag" from the headers
       const sourceHeaders = new Headers(source.headers);
       sourceHeaders.delete('X-Robots-Tag');
       source = new Response(source.body, {
@@ -82,7 +186,6 @@ export default {
         headers: sourceHeaders
       });
 
-      // Transform the source HTML to update robots meta tag
       return new HTMLRewriter()
         .on('meta', {
           element(element) {
@@ -101,10 +204,8 @@ export default {
     if (patternConfig) {
       console.log("Dynamic page detected:", url.pathname);
 
-      // Fetch the source page content
       let source = await fetch(`${domainSource}${url.pathname}`);
 
-      // Remove "X-Robots-Tag" from the headers
       const sourceHeaders = new Headers(source.headers);
       sourceHeaders.delete('X-Robots-Tag');
       source = new Response(source.body, {
@@ -115,10 +216,8 @@ export default {
       const metadata = await requestMetadata(url.pathname, patternConfig.metaDataEndpoint);
       console.log("Metadata fetched:", metadata);
 
-      // Create a custom header handler with the fetched metadata
       const customHeaderHandler = new CustomHeaderHandler(metadata);
 
-      // Transform the source HTML with the custom headers
       return new HTMLRewriter()
         .on('*', customHeaderHandler)
         .transform(source);
@@ -128,7 +227,6 @@ export default {
       console.log("Page data detected:", url.pathname);
       console.log("Referer:", referer);
 
-      // Fetch the source data content
       const sourceResponse = await fetch(`${domainSource}${url.pathname}`);
       let sourceData = await sourceResponse.json();
 
@@ -140,7 +238,6 @@ export default {
           const metadata = await requestMetadata(pathname, patternConfigForPageData.metaDataEndpoint);
           console.log("Metadata fetched:", metadata);
 
-          // Ensure nested objects exist in the source data
           sourceData.page = sourceData.page || {};
           sourceData.page.title = sourceData.page.title || {};
           sourceData.page.meta = sourceData.page.meta || {};
@@ -149,7 +246,6 @@ export default {
           sourceData.page.socialTitle = sourceData.page.socialTitle || {};
           sourceData.page.socialDesc = sourceData.page.socialDesc || {};
 
-          // Update source data with the fetched metadata
           if (metadata.title) {
             sourceData.page.title.en = metadata.title;
             sourceData.page.socialTitle.en = metadata.title;
@@ -166,7 +262,6 @@ export default {
           }
 
           console.log("returning file: ", JSON.stringify(sourceData));
-          // Return the modified JSON object
           return new Response(JSON.stringify(sourceData), {
             headers: { 'Content-Type': 'application/json' }
           });
@@ -180,7 +275,6 @@ export default {
     const sourceRequest = new Request(sourceUrl, request);
     const sourceResponse = await fetch(sourceRequest);
 
-    // Create a new response without the "X-Robots-Tag" header
     const modifiedHeaders = new Headers(sourceResponse.headers);
     modifiedHeaders.delete('X-Robots-Tag');
 
@@ -191,19 +285,17 @@ export default {
   }
 };
 
-// CustomHeaderHandler class to modify HTML content based on metadata
+// CustomHeaderHandler class
 class CustomHeaderHandler {
   constructor(metadata) {
     this.metadata = metadata;
   }
 
   element(element) {
-    // Replace the <title> tag content
     if (element.tagName == "title") {
       console.log('Replacing title tag content');
       element.setInnerContent(this.metadata.title);
     }
-    // Replace meta tags content
     if (element.tagName == "meta") {
       const name = element.getAttribute("name");
       switch (name) {
@@ -256,7 +348,6 @@ class CustomHeaderHandler {
           break;
       }
 
-      // Remove the noindex meta tag
       const robots = element.getAttribute("name");
       if (robots === "robots") {
         console.log('Updating robots meta tag to index, follow');
