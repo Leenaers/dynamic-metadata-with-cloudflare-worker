@@ -20,8 +20,8 @@ class PrerenderMonitoring {
   async send() {
     try {
       const date = new Date().toISOString().split('T')[0];
-      const logKey = `logs/${date}.json`;
-      
+      const logKey = logs/${date}.json;
+
       let existingLogs = [];
       try {
         const existing = await this.env.R2.get(logKey);
@@ -31,9 +31,9 @@ class PrerenderMonitoring {
       } catch (error) {
         console.error('Error reading existing logs:', error);
       }
-      
+
       const updatedLogs = [...existingLogs, ...this.events];
-      
+
       await this.env.R2.put(logKey, JSON.stringify(updatedLogs), {
         httpMetadata: {
           contentType: 'application/json'
@@ -78,7 +78,7 @@ const BOT_AGENTS = [
 export default {
   async fetch(request, env, ctx) {
     const monitoring = new PrerenderMonitoring(env);
-    
+
     // Extracting configuration values
     const domainSource = config.domainSource;
     const patterns = config.patterns;
@@ -88,45 +88,65 @@ export default {
     // Parse the request URL
     const url = new URL(request.url);
     const referer = request.headers.get('Referer');
-    
+
     // Bot detection
     const userAgent = request.headers.get('user-agent')?.toLowerCase() || '';
     const isBot = BOT_AGENTS.some(bot => userAgent.includes(bot));
 
+        console.log('User Agent:', userAgent);
+        console.log('Is Bot:', isBot);
+
     // Handle bot requests
-    if (isBot && !url.pathname.match(/\.(js|css|xml|json|png|jpg|gif|pdf)$/i)) {
-      try {
-        monitoring.logEvent('bot_detected', { url: url.href, userAgent });
-        
+    // Handle bot requests
+if (isBot && !url.pathname.match(/\.(js|css|xml|json|png|jpg|gif|pdf)$/i)) {
+    console.log('Bot detected, trying to serve prerendered content');
+    try {
         const urlHash = btoa(url.href);
+        console.log('Looking for content with hash:', urlHash);
+
         const stored = await env.R2.get(urlHash);
 
         if (stored) {
-          monitoring.logEvent('cache_hit', { url: url.href });
-          return new Response(await stored.text(), {
-            headers: { 'Content-Type': 'text/html' }
-          });
+            const content = await stored.text();
+            console.log('Found prerendered content:', {
+                url: url.href,
+                contentLength: content.length,
+                firstChars: content.substring(0, 200), // Log first 200 chars
+                hasHTML: content.includes('<!DOCTYPE html>'),
+                hasBody: content.includes('<body'),
+                timestamp: stored.httpMetadata.lastModified
+            });
+
+            monitoring.logEvent('cache_hit', { url: url.href });
+            return new Response(content, {
+                headers: { 
+                    'Content-Type': 'text/html',
+                    'X-Served-By': 'prerender-cache',  // Add this to identify prerendered responses
+                    'X-Prerender-Info': 'cached'
+                }
+            });
         }
 
+        console.log('No prerendered content found for hash:', urlHash);
         monitoring.logEvent('cache_miss', { url: url.href });
-        
+
         // Queue for prerendering if not already queued
         try {
-          await env.PRERENDER_QUEUE.send({
-            url: url.href,
-            timestamp: Date.now()
-          });
-          console.log('URL queued for prerendering:', url.href);
+            await env.PRERENDER_QUEUE.send({
+                url: url.href,
+                timestamp: Date.now()
+            });
+            console.log('URL queued for prerendering:', url.href);
         } catch (error) {
-          console.error('Failed to queue URL:', error);
+            console.error('Failed to queue URL:', error);
         }
-      } catch (error) {
+    } catch (error) {
         console.error('Error handling bot request:', error);
         monitoring.logEvent('error', { url: url.href, error: error.message });
-      } finally {
+    } finally {
         await monitoring.send();
-      }
     }
+}
 
     // Function to check if the URL is one of the static pages we want to index
     function isStaticIndexPage(pathname) {
@@ -135,12 +155,12 @@ export default {
       if (cleanPath === '' || cleanPath === '/') {
         return true;
       }
-      
+
       const indexPaths = [
         '/blogs',              
         '/regio-overzicht'     
       ];
-      
+
       return indexPaths.includes(cleanPath);
     }
 
@@ -176,9 +196,9 @@ export default {
     // Handle static index pages
     if (isStaticIndexPage(url.pathname)) {
       console.log("Static index page detected:", url.pathname);
-      
-      let source = await fetch(`${domainSource}${url.pathname}`);
-      
+
+      let source = await fetch(${domainSource}${url.pathname});
+
       const sourceHeaders = new Headers(source.headers);
       sourceHeaders.delete('X-Robots-Tag');
       source = new Response(source.body, {
@@ -204,7 +224,7 @@ export default {
     if (patternConfig) {
       console.log("Dynamic page detected:", url.pathname);
 
-      let source = await fetch(`${domainSource}${url.pathname}`);
+      let source = await fetch(${domainSource}${url.pathname});
 
       const sourceHeaders = new Headers(source.headers);
       sourceHeaders.delete('X-Robots-Tag');
@@ -227,7 +247,7 @@ export default {
       console.log("Page data detected:", url.pathname);
       console.log("Referer:", referer);
 
-      const sourceResponse = await fetch(`${domainSource}${url.pathname}`);
+      const sourceResponse = await fetch(${domainSource}${url.pathname});
       let sourceData = await sourceResponse.json();
 
       let pathname = referer;
@@ -271,7 +291,7 @@ export default {
 
     // If the URL does not match any patterns, fetch and return the original content
     console.log("Fetching original content for:", url.pathname);
-    const sourceUrl = new URL(`${domainSource}${url.pathname}`);
+    const sourceUrl = new URL(${domainSource}${url.pathname});
     const sourceRequest = new Request(sourceUrl, request);
     const sourceResponse = await fetch(sourceRequest);
 
