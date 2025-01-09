@@ -97,57 +97,69 @@ export default {
     console.log('Is Bot:', isBot);
 
     // Handle bot requests FIRST
-    if (isBot && !url.pathname.match(/\.(js|css|xml|json|png|jpg|gif|pdf)$/i)) {
-        console.log('Bot detected, trying to serve prerendered content');
-        try {
-            const urlHash = btoa(url.href);
-            console.log('Looking for content with hash:', urlHash);
-            
-            const stored = await env.R2.get(urlHash);
-            
-            if (stored) {
-                const content = await stored.text();
-                console.log('Found prerendered content:', {
-                    url: url.href,
-                    contentLength: content.length,
-                    firstChars: content.substring(0, 200),
-                    hasHTML: content.includes('<!DOCTYPE html>'),
-                    hasBody: content.includes('<body'),
-                    timestamp: stored.httpMetadata.lastModified
-                });
-                
-                monitoring.logEvent('cache_hit', { url: url.href });
-                // Important: Return here and don't continue with other logic
-                return new Response(content, {
-                    headers: { 
-                        'Content-Type': 'text/html',
-                        'X-Served-By': 'prerender-cache',
-                        'X-Prerender-Info': 'cached'
-                    }
-                });
-            }
-
-            console.log('No prerendered content found for hash:', urlHash);
-            monitoring.logEvent('cache_miss', { url: url.href });
-            
-            // Queue for prerendering if not already queued
-            try {
-                await env.PRERENDER_QUEUE.send({
-                    urls: [url.href], // Match the format expected by queue processor
-                    timestamp: Date.now()
-                });
-                console.log('URL queued for prerendering:', url.href);
-            } catch (error) {
-                console.error('Failed to queue URL:', error);
-            }
-            // Continue with normal processing for cache miss
-        } catch (error) {
-            console.error('Error handling bot request:', error);
-            monitoring.logEvent('error', { url: url.href, error: error.message });
-        } finally {
-            await monitoring.send();
-        }
+    // Handle bot requests FIRST
+if (isBot) {
+    // First check if it's a static asset - if so, serve normally
+    if (url.pathname.match(/\.(js|css|xml|json|png|jpg|gif|pdf)$/i)) {
+        console.log('Bot requesting static asset, serving normally:', url.pathname);
+        const sourceUrl = new URL(`${domainSource}${url.pathname}`);
+        const sourceRequest = new Request(sourceUrl, request);
+        const sourceResponse = await fetch(sourceRequest);
+        return new Response(sourceResponse.body, {
+            status: sourceResponse.status,
+            headers: sourceResponse.headers,
+        });
     }
+
+    // For HTML pages, try to serve prerendered content
+    console.log('Bot detected, trying to serve prerendered content');
+    try {
+        const urlHash = btoa(url.href);
+        console.log('Looking for content with hash:', urlHash);
+        
+        const stored = await env.R2.get(urlHash);
+        
+        if (stored) {
+            const content = await stored.text();
+            console.log('Found prerendered content:', {
+                url: url.href,
+                contentLength: content.length,
+                firstChars: content.substring(0, 200),
+                hasHTML: content.includes('<!DOCTYPE html>'),
+                hasBody: content.includes('<body'),
+                timestamp: stored.httpMetadata.lastModified
+            });
+            
+            monitoring.logEvent('cache_hit', { url: url.href });
+            return new Response(content, {
+                headers: { 
+                    'Content-Type': 'text/html',
+                    'X-Served-By': 'prerender-cache',
+                    'X-Prerender-Info': 'cached'
+                }
+            });
+        }
+
+        console.log('No prerendered content found for hash:', urlHash);
+        monitoring.logEvent('cache_miss', { url: url.href });
+        
+        // Queue for prerendering if not already queued
+        try {
+            await env.PRERENDER_QUEUE.send({
+                urls: [url.href],
+                timestamp: Date.now()
+            });
+            console.log('URL queued for prerendering:', url.href);
+        } catch (error) {
+            console.error('Failed to queue URL:', error);
+        }
+    } catch (error) {
+        console.error('Error handling bot request:', error);
+        monitoring.logEvent('error', { url: url.href, error: error.message });
+    } finally {
+        await monitoring.send();
+    }
+}
 
     // Only continue with normal processing if:
     // 1. Not a bot request
