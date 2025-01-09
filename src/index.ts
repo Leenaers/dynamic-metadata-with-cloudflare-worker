@@ -1,19 +1,89 @@
 import { config } from '../config.js';
 
-// Add bot detection constants
+// User agents handled by Prerender
 const BOT_AGENTS = [
-  'bot',
-  'crawler',
-  'spider',
-  'googlebot',
-  'chrome-lighthouse',
-  'headlesschrome',
-  'slurp',
-  'bingbot',
-  'whatsapp',
-  'facebook',
-  'twitter',
-  'linkedin'
+  "googlebot",
+  "yahoo! slurp",
+  "bingbot",
+  "yandex",
+  "baiduspider",
+  "facebookexternalhit",
+  "twitterbot",
+  "rogerbot",
+  "linkedinbot",
+  "embedly",
+  "quora link preview",
+  "showyoubot",
+  "outbrain",
+  "pinterest/0.",
+  "developers.google.com/+/web/snippet",
+  "slackbot",
+  "vkshare",
+  "w3c_validator",
+  "redditbot",
+  "applebot",
+  "whatsapp",
+  "flipboard",
+  "tumblr",
+  "bitlybot",
+  "skypeuripreview",
+  "nuzzel",
+  "discordbot",
+  "google page speed",
+  "qwantify",
+  "pinterestbot",
+  "bitrix link preview",
+  "xing-contenttabreceiver",
+  "chrome-lighthouse",
+  "telegrambot",
+  "integration-test",
+  "google-inspectiontool"
+];
+
+// Extensions to ignore for prerendering
+const IGNORE_EXTENSIONS = [
+  ".js",
+  ".css",
+  ".xml",
+  ".less",
+  ".png",
+  ".jpg",
+  ".jpeg",
+  ".gif",
+  ".pdf",
+  ".doc",
+  ".txt",
+  ".ico",
+  ".rss",
+  ".zip",
+  ".mp3",
+  ".rar",
+  ".exe",
+  ".wmv",
+  ".doc",
+  ".avi",
+  ".ppt",
+  ".mpg",
+  ".mpeg",
+  ".tif",
+  ".wav",
+  ".mov",
+  ".psd",
+  ".ai",
+  ".xls",
+  ".mp4",
+  ".m4a",
+  ".swf",
+  ".dat",
+  ".dmg",
+  ".iso",
+  ".flv",
+  ".m4v",
+  ".torrent",
+  ".woff",
+  ".ttf",
+  ".svg",
+  ".webmanifest",
 ];
 
 // Add monitoring class at the top
@@ -33,14 +103,15 @@ export default {
 
     // Parse the request URL
     const url = new URL(request.url);
-    const referer = request.headers.get('Referer');
-    
-    // Add bot detection
     const userAgent = request.headers.get('user-agent')?.toLowerCase() || '';
+    const pathName = url.pathname.toLowerCase();
+    const extension = pathName.substring(pathName.lastIndexOf(".") || pathName.length)?.toLowerCase();
+
+    // Add bot detection
     const isBot = BOT_AGENTS.some(bot => userAgent.includes(bot));
 
     // Handle bot requests
-    if (isBot && !url.pathname.match(/\.(js|css|xml|json|png|jpg|gif|pdf)$/i)) {
+    if (isBot && !IGNORE_EXTENSIONS.includes(extension)) {
       try {
         monitoring.logEvent('bot_detected', { url: url.href, userAgent });
         
